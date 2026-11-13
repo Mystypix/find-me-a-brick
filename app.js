@@ -2,8 +2,9 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const store = Object.assign({ key: '', sets: {}, cur: null, hideDone: true },
+const store = Object.assign({ sets: {}, cur: null, hideDone: true },
   JSON.parse(localStorage.getItem('lf.v1') || 'null'));
+delete store.key; // older versions kept a Rebrickable key here
 const save = () => localStorage.setItem('lf.v1', JSON.stringify(store));
 const cur = () => store.sets[store.cur];
 const left = p => p.qty - (cur().found[p.key] || 0);
@@ -16,42 +17,26 @@ function bump(key, delta) {
 }
 
 // ---------- Rebrickable ----------
-async function rb(url) {
-  const r = await fetch(url, { headers: { Authorization: 'key ' + store.key } });
-  if (r.status === 401 || r.status === 403) throw new Error('Rebrickable odmítl API klíč. Zkontroluj ho v Nastavení.');
-  if (r.status === 404) throw new Error('Sada s tímhle číslem neexistuje.');
-  if (r.status === 429) throw new Error('Rebrickable je přetížený, zkus to za chvíli znovu.');
-  if (!r.ok) throw new Error('Rebrickable vrátil chybu ' + r.status + '.');
-  return r.json();
-}
+const SET_ERRORS = {
+  no_key: 'Na serveru chybí API klíč Rebrickable (proměnná REBRICKABLE_API_KEY v Netlify).',
+  bad_key: 'Rebrickable odmítl API klíč nastavený v Netlify.',
+  bad_number: 'Tohle nevypadá jako číslo sady.',
+  not_found: 'Sada s tímhle číslem neexistuje.',
+  busy: 'Rebrickable je přetížený, zkus to za chvíli znovu.',
+};
 
+// The set comes from our own Netlify function, which holds the Rebrickable key.
 async function loadSet(input) {
   let num = input.trim();
   if (!num) return;
   if (!/-\d+$/.test(num)) num += '-1';
-  if (!store.key) { $('#settings').open = true; throw new Error('Nejdřív zadej API klíč v Nastavení.'); }
-  const base = 'https://rebrickable.com/api/v3/lego/sets/' + encodeURIComponent(num) + '/';
-  const info = await rb(base);
-  const map = new Map();
-  let url = base + 'parts/?page_size=1000&inc_minifig_parts=1';
-  while (url) {
-    const d = await rb(url);
-    for (const it of d.results) {
-      if (it.is_spare) continue;
-      const key = it.part.part_num + '_' + it.color.id;
-      const e = map.get(key);
-      if (e) e.qty += it.quantity;
-      else map.set(key, {
-        key, partNum: it.part.part_num, name: it.part.name, img: it.part.part_img_url || '',
-        colorId: it.color.id, colorName: it.color.name, rgb: it.color.rgb, qty: it.quantity,
-        blIds: (it.part.external_ids && it.part.external_ids.BrickLink) || [],
-      });
-    }
-    url = d.next;
-  }
-  const old = store.sets[num];
-  store.sets[num] = { num, name: info.name, img: info.set_img_url || '', parts: [...map.values()], found: old ? old.found : {} };
-  store.cur = num;
+  const r = await fetch('/api/set/' + encodeURIComponent(num));
+  const isJson = (r.headers.get('content-type') || '').includes('json');
+  const d = isJson ? await r.json() : {};
+  if (!r.ok || !d.parts) throw new Error(SET_ERRORS[d.error] || 'Sadu se nepodařilo načíst (chyba ' + r.status + ').');
+  const old = store.sets[d.num];
+  store.sets[d.num] = { num: d.num, name: d.name, img: d.img, parts: d.parts, found: old ? old.found : {} };
+  store.cur = d.num;
   save();
 }
 
@@ -105,8 +90,6 @@ $('#setForm').addEventListener('submit', async e => {
   catch (ex) { err.textContent = ex.message || 'Načtení se nepovedlo. Jsi online?'; err.hidden = false; }
   btn.disabled = false; btn.textContent = 'Načíst';
 });
-$('#apiKey').value = store.key;
-$('#apiKey').addEventListener('change', e => { store.key = e.target.value.trim(); save(); });
 $('#savedSets').addEventListener('click', e => {
   const b = e.target.closest('[data-set]'); if (!b) return;
   store.cur = b.dataset.set; save(); renderSet();
@@ -366,6 +349,5 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopCam(); else if (!$('#tabLive').hidden) startCam();
 });
 
-if (!store.key) $('#settings').open = true;
 renderSet();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
