@@ -1,0 +1,12 @@
+{
+  "name": "Hledač kostek",
+  "short_name": "Kostky",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#161616",
+  "theme_color": "#d01012",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
